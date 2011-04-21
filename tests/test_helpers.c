@@ -141,7 +141,7 @@ int copy_file(const char *src, const char *dst)
 	if (gitfo_read_file(&source_buf, src) < GIT_SUCCESS)
 		return GIT_ENOTFOUND;
 
-	dst_fd = gitfo_creat(dst, 0644);
+	dst_fd = gitfo_creat_force(dst, 0644);
 	if (dst_fd < 0)
 		goto cleanup;
 
@@ -174,4 +174,113 @@ int cmp_files(const char *a, const char *b)
 	gitfo_free_buf(&buf_b);
 
 	return error;
+}
+
+static int remove_filesystem_element_recurs(void *GIT_UNUSED(nil), char *path)
+{
+	int error = GIT_SUCCESS;
+
+	GIT_UNUSED_ARG(nil);
+
+	error = gitfo_isdir(path);
+	if (error == GIT_SUCCESS) {
+		size_t root_size = strlen(path);
+
+		error = gitfo_dirent(path, GIT_PATH_MAX, remove_filesystem_element_recurs, NULL);
+		if (error < GIT_SUCCESS)
+			return error;
+
+		path[root_size] = 0;
+		return rmdir(path);
+	}
+
+	return gitfo_unlink(path);
+}
+
+int rmdir_recurs(const char *directory_path)
+{
+	char buffer[GIT_PATH_MAX];
+	strcpy(buffer, directory_path);
+	return remove_filesystem_element_recurs(NULL, buffer);
+}
+
+typedef struct {
+	size_t src_len, dst_len;
+	char *dst;
+} copydir_data;
+
+static int copy_filesystem_element_recurs(void *_data, char *source)
+{
+	copydir_data *data = (copydir_data *)_data;
+
+	data->dst[data->dst_len] = 0;
+	git__joinpath(data->dst, data->dst, source + data->src_len);
+
+	if (gitfo_isdir(source) == GIT_SUCCESS)
+		return gitfo_dirent(source, GIT_PATH_MAX, copy_filesystem_element_recurs, _data);
+
+	return copy_file(source, data->dst);
+}
+
+int copydir_recurs(const char *source_directory_path, const char *destination_directory_path)
+{
+	char source_buffer[GIT_PATH_MAX];
+	char dest_buffer[GIT_PATH_MAX];
+	copydir_data data;
+
+	/* Source has to exist, Destination hast to _not_ exist */
+	if (gitfo_isdir(source_directory_path)  || !gitfo_isdir(destination_directory_path))
+		return GIT_EINVALIDPATH;
+
+	git__joinpath(source_buffer, source_directory_path, "");
+	data.src_len = strlen(source_buffer);
+
+	git__joinpath(dest_buffer, destination_directory_path, "");
+	data.dst = dest_buffer;
+	data.dst_len = strlen(dest_buffer);
+
+	return copy_filesystem_element_recurs(&data, source_buffer);
+}
+
+int open_temp_repo(git_repository **repo, const char *path)
+{
+	int error;
+	if ((error = copydir_recurs(path, TEMP_REPO_FOLDER)) < GIT_SUCCESS)
+		return error;
+
+	return git_repository_open(repo, TEMP_REPO_FOLDER);
+}
+
+void close_temp_repo(git_repository *repo)
+{
+	git_repository_free(repo);
+	rmdir_recurs(TEMP_REPO_FOLDER);
+}
+
+static int remove_placeholders_recurs(void *filename, char *path)
+{
+	char passed_filename[GIT_PATH_MAX];
+	char *data = (char *)filename;
+
+	if (!gitfo_isdir(path))
+		return gitfo_dirent(path, GIT_PATH_MAX, remove_placeholders_recurs, data);
+
+	 if (git__basename_r(passed_filename, sizeof(passed_filename), path) < GIT_SUCCESS)
+		 return GIT_EINVALIDPATH;
+
+	if (!strcmp(data, passed_filename))
+		return gitfo_unlink(path);
+
+	return GIT_SUCCESS;
+}
+
+int remove_placeholders(char *directory_path, char *filename)
+{
+	char buffer[GIT_PATH_MAX];
+
+	if (gitfo_isdir(directory_path))
+		return GIT_EINVALIDPATH;
+
+	strcpy(buffer, directory_path);
+	return remove_placeholders_recurs(filename, buffer);
 }

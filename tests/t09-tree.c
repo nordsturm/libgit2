@@ -29,7 +29,7 @@
 
 static const char *tree_oid = "1810dff58d8a660512d4832e740f692884338ccd";
 
-BEGIN_TEST("readtree", tree_entry_access_test)
+BEGIN_TEST(read0, "acces randomly the entries on a loaded tree")
 	git_oid id;
 	git_repository *repo;
 	git_tree *tree;
@@ -51,7 +51,7 @@ BEGIN_TEST("readtree", tree_entry_access_test)
 	git_repository_free(repo);
 END_TEST
 
-BEGIN_TEST("readtree", tree_read_test)
+BEGIN_TEST(read1, "read a tree from the repository")
 	git_oid id;
 	git_repository *repo;
 	git_tree *tree;
@@ -66,105 +66,24 @@ BEGIN_TEST("readtree", tree_read_test)
 
 	must_be_true(git_tree_entrycount(tree) == 3);
 
+	/* GH-86: git_object_lookup() should also check the type if the object comes from the cache */
+	must_be_true(git_object_lookup(&obj, repo, &id, GIT_OBJ_TREE) == 0);
+	must_be_true(git_object_lookup(&obj, repo, &id, GIT_OBJ_BLOB) == GIT_EINVALIDTYPE);
+
 	entry = git_tree_entry_byname(tree, "README");
 	must_be_true(entry != NULL);
 
 	must_be_true(strcmp(git_tree_entry_name(entry), "README") == 0);
 
-	must_pass(git_tree_entry_2object(&obj, entry));
+	must_pass(git_tree_entry_2object(&obj, repo, entry));
 
 	git_repository_free(repo);
 END_TEST
 
-BEGIN_TEST("modify", tree_in_memory_add_test)
-	const unsigned int entry_count = 128;
+BEGIN_SUITE(tree)
+	ADD_TEST(read0);
+	ADD_TEST(read1);
+//	ADD_TEST(write0); /* TODO THREADSAFE */
+//	ADD_TEST(write1);
+END_SUITE
 
-	git_repository *repo;
-	git_tree *tree;
-	unsigned int i;
-	git_oid entry_id;
-
-	must_pass(git_repository_open(&repo, REPOSITORY_FOLDER));
-	must_pass(git_tree_new(&tree, repo));
-
-	git_oid_mkstr(&entry_id, tree_oid);
-	for (i = 0; i < entry_count; ++i) {
-		char filename[32];
-		git_tree_entry *ent = NULL;
-
-		sprintf(filename, "file%d.txt", i);
-		must_pass(git_tree_add_entry(&ent, tree, &entry_id, filename, 040000));
-		must_be_true(ent != NULL);
-	}
-
-	must_be_true(git_tree_entrycount(tree) == entry_count);
-	must_pass(git_object_write((git_object *)tree));
-	must_pass(remove_loose_object(REPOSITORY_FOLDER, (git_object *)tree));
-
-	git_object_free((git_object *)tree);
-
-	git_repository_free(repo);
-END_TEST
-
-BEGIN_TEST("modify", tree_add_entry_test)
-	git_oid id;
-	git_repository *repo;
-	git_tree *tree;
-	git_tree_entry *entry;
-	unsigned int i;
-	/* char hex_oid[41]; */
-
-	must_pass(git_repository_open(&repo, REPOSITORY_FOLDER));
-
-	git_oid_mkstr(&id, tree_oid);
-
-	must_pass(git_tree_lookup(&tree, repo, &id));
-
-	must_be_true(git_tree_entrycount(tree) == 3);
-
-	/* check there is NP if we don't want the
-	 * created entry back */
-	git_tree_add_entry(NULL, tree, &id, "zzz_test_entry.dat", 0);
-	git_tree_add_entry(NULL, tree, &id, "01_test_entry.txt", 0);
-
-	must_be_true(git_tree_entrycount(tree) == 5);
-
-	entry = git_tree_entry_byindex(tree, 0);
-	must_be_true(strcmp(git_tree_entry_name(entry), "01_test_entry.txt") == 0);
-
-	entry = git_tree_entry_byindex(tree, 4);
-	must_be_true(strcmp(git_tree_entry_name(entry), "zzz_test_entry.dat") == 0);
-
-	must_pass(git_tree_remove_entry_byname(tree, "README"));
-	must_be_true(git_tree_entrycount(tree) == 4);
-
-	for (i = 0; i < git_tree_entrycount(tree); ++i) {
-		entry = git_tree_entry_byindex(tree, i);
-		must_be_true(strcmp(git_tree_entry_name(entry), "README") != 0);
-	}
-
-	must_pass(git_object_write((git_object *)tree));
-
-/*
-	git_oid_fmt(hex_oid, git_tree_id(tree));
-	hex_oid[40] = 0;
-	printf("TREE New SHA1: %s\n", hex_oid);
-*/
-
-	must_pass(remove_loose_object(REPOSITORY_FOLDER, (git_object *)tree));
-	git_object_free((git_object *)tree);
-	git_repository_free(repo);
-END_TEST
-
-
-git_testsuite *libgit2_suite_tree(void)
-{
-	git_testsuite *suite = git_testsuite_new("Tree");
-
-	ADD_TEST(suite, "readtree", tree_entry_access_test);
-	ADD_TEST(suite, "readtree", tree_read_test);
-	ADD_TEST(suite, "modify", tree_in_memory_add_test);
-	ADD_TEST(suite, "modify", tree_add_entry_test);
-
-	return suite;
-}

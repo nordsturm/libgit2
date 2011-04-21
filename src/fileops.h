@@ -57,8 +57,11 @@ typedef struct {  /* file io buffer  */
 extern int gitfo_exists(const char *path);
 extern int gitfo_open(const char *path, int flags);
 extern int gitfo_creat(const char *path, int mode);
+extern int gitfo_creat_force(const char *path, int mode);
+extern int gitfo_mktemp(char *path_out, const char *filename);
 extern int gitfo_isdir(const char *path);
 extern int gitfo_mkdir_recurs(const char *path, int mode);
+extern int gitfo_mkdir_2file(const char *path);
 #define gitfo_close(fd) close(fd)
 
 extern int gitfo_read(git_file fd, void *buf, size_t cnt);
@@ -68,7 +71,13 @@ extern git_off_t gitfo_size(git_file fd);
 
 extern int gitfo_read_file(gitfo_buf *obj, const char *path);
 extern void gitfo_free_buf(gitfo_buf *obj);
-extern int gitfo_move_file(char *from, char *to);
+
+/* Move (rename) a file; this operation is atomic */
+extern int gitfo_mv(const char *from, const char *to);
+
+/* Move a file (forced); this will create the destination
+ * path if it doesn't exist */
+extern int gitfo_mv_force(const char *from, const char *to);
 
 #define gitfo_stat(p,b) stat(p, b)
 #define gitfo_fstat(f,b) fstat(f, b)
@@ -131,6 +140,12 @@ extern int gitfo_write_cached(gitfo_cache *ioc, void *buf, size_t len);
 extern int gitfo_flush_cached(gitfo_cache *ioc);
 extern int gitfo_close_cached(gitfo_cache *ioc);
 
+
+extern int gitfo_cmp_path(const char *name1, int len1, int isdir1,
+		const char *name2, int len2, int isdir2);
+
+extern int gitfo_getcwd(char *buffer_out, size_t size);
+
 /**
  * Clean up a provided absolute or relative directory path.
  * 
@@ -148,12 +163,13 @@ extern int gitfo_close_cached(gitfo_cache *ioc);
  * the file system perspective.
  *
  * @param buffer_out buffer to populate with the normalized path.
+ * @param size buffer size.
  * @param path directory path to clean up.
  * @return
  * - GIT_SUCCESS on success;
  * - GIT_ERROR when the input path is invalid or escapes the current directory.
  */
-GIT_EXTERN(int) gitfo_prettify_dir_path(char *buffer_out, const char *path);
+int gitfo_prettify_dir_path(char *buffer_out, size_t size, const char *path);
 
 /**
  * Clean up a provided absolute or relative file path.
@@ -170,11 +186,13 @@ GIT_EXTERN(int) gitfo_prettify_dir_path(char *buffer_out, const char *path);
  * the file system perspective.
  *
  * @param buffer_out buffer to populate with the normalized path.
+ * @param size buffer size.
  * @param path file path to clean up.
  * @return
  * - GIT_SUCCESS on success;
  * - GIT_ERROR when the input path is invalid or escapes the current directory.
  */
-GIT_EXTERN(int) gitfo_prettify_file_path(char *buffer_out, const char *path);
+int gitfo_prettify_file_path(char *buffer_out, size_t size, const char *path);
 
+int retrieve_path_root_offset(const char *path);
 #endif /* INCLUDE_fileops_h__ */

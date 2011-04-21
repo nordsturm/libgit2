@@ -27,18 +27,7 @@
 #include "vector.h"
 #include "fileops.h"
 
-BEGIN_TEST("refcnt", init_inc2_dec2_free)
-	git_refcnt p;
-
-	gitrc_init(&p, 0);
-	gitrc_inc(&p);
-	gitrc_inc(&p);
-	must_be_true(!gitrc_dec(&p));
-	must_be_true(gitrc_dec(&p));
-	gitrc_free(&p);
-END_TEST
-
-BEGIN_TEST("strutil", prefix_comparison)
+BEGIN_TEST(string0, "compare prefixes")
 	must_be_true(git__prefixcmp("", "") == 0);
 	must_be_true(git__prefixcmp("a", "") == 0);
 	must_be_true(git__prefixcmp("", "a") < 0);
@@ -49,7 +38,7 @@ BEGIN_TEST("strutil", prefix_comparison)
 	must_be_true(git__prefixcmp("ab", "aa") > 0);
 END_TEST
 
-BEGIN_TEST("strutil", suffix_comparison)
+BEGIN_TEST(string1, "compare suffixes")
 	must_be_true(git__suffixcmp("", "") == 0);
 	must_be_true(git__suffixcmp("a", "") == 0);
 	must_be_true(git__suffixcmp("", "a") < 0);
@@ -60,7 +49,31 @@ BEGIN_TEST("strutil", suffix_comparison)
 	must_be_true(git__suffixcmp("zaz", "ac") > 0);
 END_TEST
 
-BEGIN_TEST("strutil", dirname)
+
+BEGIN_TEST(vector0, "initial size of 1 would cause writing past array bounds")
+  git_vector x;
+  int i;
+  git_vector_init(&x, 1, NULL);
+  for (i = 0; i < 10; ++i) {
+    git_vector_insert(&x, (void*) 0xabc);
+  }
+  git_vector_free(&x);
+END_TEST
+
+BEGIN_TEST(vector1, "don't read past array bounds on remove()")
+  git_vector x;
+  // make initial capacity exact for our insertions.
+  git_vector_init(&x, 3, NULL);
+  git_vector_insert(&x, (void*) 0xabc);
+  git_vector_insert(&x, (void*) 0xdef);
+  git_vector_insert(&x, (void*) 0x123);
+
+  git_vector_remove(&x, 0);  // used to read past array bounds.
+  git_vector_free(&x);
+END_TEST
+
+
+BEGIN_TEST(path0, "get the dirname of a path")
 	char dir[64], *dir2;
 
 #define DIRNAME_TEST(A, B) { \
@@ -78,14 +91,18 @@ BEGIN_TEST("strutil", dirname)
 	DIRNAME_TEST("/usr", "/");
 	DIRNAME_TEST("/usr/", "/");
 	DIRNAME_TEST("/usr/lib", "/usr");
+	DIRNAME_TEST("/usr/lib/", "/usr");
+	DIRNAME_TEST("/usr/lib//", "/usr");
 	DIRNAME_TEST("usr/lib", "usr");
+	DIRNAME_TEST("usr/lib/", "usr");
+	DIRNAME_TEST("usr/lib//", "usr");
 	DIRNAME_TEST(".git/", ".");
 
 #undef DIRNAME_TEST
 
 END_TEST
 
-BEGIN_TEST("strutil", basename)
+BEGIN_TEST(path1, "get the base name of a path")
 	char base[64], *base2;
 
 #define BASENAME_TEST(A, B) { \
@@ -103,13 +120,14 @@ BEGIN_TEST("strutil", basename)
 	BASENAME_TEST("/usr", "usr");
 	BASENAME_TEST("/usr/", "usr");
 	BASENAME_TEST("/usr/lib", "lib");
+	BASENAME_TEST("/usr/lib//", "lib");
 	BASENAME_TEST("usr/lib", "lib");
 
 #undef BASENAME_TEST
 
 END_TEST
 
-BEGIN_TEST("strutil", topdir)
+BEGIN_TEST(path2, "get the latest component in a path")
 	const char *dir;
 
 #define TOPDIR_TEST(A, B) { \
@@ -133,213 +151,204 @@ BEGIN_TEST("strutil", topdir)
 #undef TOPDIR_TEST
 END_TEST
 
-/* Initial size of 1 will cause writing past array bounds prior to fix */
-BEGIN_TEST("vector", initial_size_one)
-  git_vector x;
-  int i;
-  git_vector_init(&x, 1, NULL, NULL);
-  for (i = 0; i < 10; ++i) {
-    git_vector_insert(&x, (void*) 0xabc);
-  }
-  git_vector_free(&x);
-END_TEST
+typedef int (normalize_path)(char *, size_t, const char *);
 
-/* vector used to read past array bounds on remove() */
-BEGIN_TEST("vector", remove)
-  git_vector x;
-  // make initial capacity exact for our insertions.
-  git_vector_init(&x, 3, NULL, NULL);
-  git_vector_insert(&x, (void*) 0xabc);
-  git_vector_insert(&x, (void*) 0xdef);
-  git_vector_insert(&x, (void*) 0x123);
+/* Assert flags */
+#define CWD_AS_PREFIX 1
+#define PATH_AS_SUFFIX 2
+#define ROOTED_PATH 4
 
-  git_vector_remove(&x, 0);  // used to read past array bounds.
-  git_vector_free(&x);
-END_TEST
-
-
-
-typedef int (normalize_path)(char *, const char *);
-
-static int ensure_normalized(const char *input_path, const char *expected_path, normalize_path normalizer)
+static int ensure_normalized(const char *input_path, const char *expected_path, normalize_path normalizer, int assert_flags)
 {
 	int error = GIT_SUCCESS;
 	char buffer_out[GIT_PATH_MAX];
+	char current_workdir[GIT_PATH_MAX];
 
-	error = normalizer(buffer_out, input_path);
+	error = gitfo_getcwd(current_workdir, sizeof(current_workdir));
+	if (error < GIT_SUCCESS)
+		return error;
+
+	error = normalizer(buffer_out, sizeof(buffer_out), input_path);
 	if (error < GIT_SUCCESS)
 		return error;
 
 	if (expected_path == NULL)
 		return error;
 
-	if (strcmp(buffer_out, expected_path))
-		error = GIT_ERROR;
+	if ((assert_flags & PATH_AS_SUFFIX) != 0)
+		if (git__suffixcmp(buffer_out, expected_path))
+			return GIT_ERROR;
+
+	if ((assert_flags & CWD_AS_PREFIX) != 0)
+		if (git__prefixcmp(buffer_out, current_workdir))
+			return GIT_ERROR;
+
+	if ((assert_flags & ROOTED_PATH) != 0) {
+		error = strcmp(expected_path, buffer_out);
+	}
 
 	return error;
 }
 
-static int ensure_dir_path_normalized(const char *input_path, const char *expected_path)
+static int ensure_dir_path_normalized(const char *input_path, const char *expected_path, int assert_flags)
 {
-	return ensure_normalized(input_path, expected_path, gitfo_prettify_dir_path);
+	return ensure_normalized(input_path, expected_path, gitfo_prettify_dir_path, assert_flags);
 }
 
-static int ensure_file_path_normalized(const char *input_path, const char *expected_path)
+static int ensure_file_path_normalized(const char *input_path, const char *expected_path, int assert_flags)
 {
-	return ensure_normalized(input_path, expected_path, gitfo_prettify_file_path);
+	return ensure_normalized(input_path, expected_path, gitfo_prettify_file_path, assert_flags);
 }
 
-BEGIN_TEST("path", file_path_prettifying)
-	must_pass(ensure_file_path_normalized("a", "a"));
-	must_pass(ensure_file_path_normalized("./testrepo.git", "testrepo.git"));
-	must_pass(ensure_file_path_normalized("./.git", ".git"));
-	must_pass(ensure_file_path_normalized("./git.", "git."));
-	must_fail(ensure_file_path_normalized("git./", NULL));
-	must_fail(ensure_file_path_normalized("", NULL));
-	must_fail(ensure_file_path_normalized(".", NULL));
-	must_fail(ensure_file_path_normalized("./", NULL));
-	must_fail(ensure_file_path_normalized("./.", NULL));
-	must_fail(ensure_file_path_normalized("./..", NULL));
-	must_fail(ensure_file_path_normalized("../.", NULL));
-	must_fail(ensure_file_path_normalized("./.././/", NULL));
-	must_fail(ensure_file_path_normalized("dir/..", NULL));
-	must_fail(ensure_file_path_normalized("dir/sub/../..", NULL));
-	must_fail(ensure_file_path_normalized("dir/sub/..///..", NULL));
-	must_fail(ensure_file_path_normalized("dir/sub///../..", NULL));
-	must_fail(ensure_file_path_normalized("dir/sub///..///..", NULL));
-	must_fail(ensure_file_path_normalized("dir/sub/../../..", NULL));
-	must_pass(ensure_file_path_normalized("dir", "dir"));
-	must_fail(ensure_file_path_normalized("dir//", NULL));
-	must_pass(ensure_file_path_normalized("./dir", "dir"));
-	must_fail(ensure_file_path_normalized("dir/.", NULL));
-	must_fail(ensure_file_path_normalized("dir///./", NULL));
-	must_fail(ensure_file_path_normalized("dir/sub/..", NULL));
-	must_fail(ensure_file_path_normalized("dir//sub/..",NULL));
-	must_fail(ensure_file_path_normalized("dir//sub/../", NULL));
-	must_fail(ensure_file_path_normalized("dir/sub/../", NULL));
-	must_fail(ensure_file_path_normalized("dir/sub/../.", NULL));
-	must_fail(ensure_file_path_normalized("dir/s1/../s2/", NULL));
-	must_fail(ensure_file_path_normalized("d1/s1///s2/..//../s3/", NULL));
-	must_pass(ensure_file_path_normalized("d1/s1//../s2/../../d2", "d2"));
-	must_fail(ensure_file_path_normalized("dir/sub/../", NULL));
-	must_fail(ensure_file_path_normalized("....", NULL));
-	must_fail(ensure_file_path_normalized("...", NULL));
-	must_fail(ensure_file_path_normalized("./...", NULL));
-	must_fail(ensure_file_path_normalized("d1/...", NULL));
-	must_fail(ensure_file_path_normalized("d1/.../", NULL));
-	must_fail(ensure_file_path_normalized("d1/.../d2", NULL));
+BEGIN_TEST(path3, "prettify and validate a path to a file")
+	must_pass(ensure_file_path_normalized("a", "a", CWD_AS_PREFIX | PATH_AS_SUFFIX));
+	must_pass(ensure_file_path_normalized("./testrepo.git", "testrepo.git", CWD_AS_PREFIX | PATH_AS_SUFFIX));
+	must_pass(ensure_file_path_normalized("./.git", ".git", CWD_AS_PREFIX | PATH_AS_SUFFIX));
+	must_pass(ensure_file_path_normalized("./git.", "git.", CWD_AS_PREFIX | PATH_AS_SUFFIX));
+	must_fail(ensure_file_path_normalized("git./", NULL, 0));
+	must_fail(ensure_file_path_normalized("", NULL, 0));
+	must_fail(ensure_file_path_normalized(".", NULL, 0));
+	must_fail(ensure_file_path_normalized("./", NULL, 0));
+	must_fail(ensure_file_path_normalized("./.", NULL, 0));
+	must_fail(ensure_file_path_normalized("./..", NULL, 0));
+	must_fail(ensure_file_path_normalized("../.", NULL, 0));
+	must_fail(ensure_file_path_normalized("./.././/", NULL, 0));
+	must_fail(ensure_file_path_normalized("dir/..", NULL, 0));
+	must_fail(ensure_file_path_normalized("dir/sub/../..", NULL, 0));
+	must_fail(ensure_file_path_normalized("dir/sub/..///..", NULL, 0));
+	must_fail(ensure_file_path_normalized("dir/sub///../..", NULL, 0));
+	must_fail(ensure_file_path_normalized("dir/sub///..///..", NULL, 0));
+	must_fail(ensure_file_path_normalized("dir/sub/../../..", NULL, 0));
+	must_pass(ensure_file_path_normalized("dir", "dir", CWD_AS_PREFIX | PATH_AS_SUFFIX));
+	must_fail(ensure_file_path_normalized("dir//", NULL, 0));
+	must_pass(ensure_file_path_normalized("./dir", "dir", CWD_AS_PREFIX | PATH_AS_SUFFIX));
+	must_fail(ensure_file_path_normalized("dir/.", NULL, 0));
+	must_fail(ensure_file_path_normalized("dir///./", NULL, 0));
+	must_fail(ensure_file_path_normalized("dir/sub/..", NULL, 0));
+	must_fail(ensure_file_path_normalized("dir//sub/..",NULL, 0));
+	must_fail(ensure_file_path_normalized("dir//sub/../", NULL, 0));
+	must_fail(ensure_file_path_normalized("dir/sub/../", NULL, 0));
+	must_fail(ensure_file_path_normalized("dir/sub/../.", NULL, 0));
+	must_fail(ensure_file_path_normalized("dir/s1/../s2/", NULL, 0));
+	must_fail(ensure_file_path_normalized("d1/s1///s2/..//../s3/", NULL, 0));
+	must_pass(ensure_file_path_normalized("d1/s1//../s2/../../d2", "d2", CWD_AS_PREFIX | PATH_AS_SUFFIX));
+	must_fail(ensure_file_path_normalized("dir/sub/../", NULL, 0));
+	must_pass(ensure_file_path_normalized("../../a/../../b/c/d/../../e", "b/e", PATH_AS_SUFFIX));
+	must_fail(ensure_file_path_normalized("....", NULL, 0));
+	must_fail(ensure_file_path_normalized("...", NULL, 0));
+	must_fail(ensure_file_path_normalized("./...", NULL, 0));
+	must_fail(ensure_file_path_normalized("d1/...", NULL, 0));
+	must_fail(ensure_file_path_normalized("d1/.../", NULL, 0));
+	must_fail(ensure_file_path_normalized("d1/.../d2", NULL, 0));
 	
-	must_pass(ensure_file_path_normalized("/a", "/a"));
-	must_pass(ensure_file_path_normalized("/./testrepo.git", "/testrepo.git"));
-	must_pass(ensure_file_path_normalized("/./.git", "/.git"));
-	must_pass(ensure_file_path_normalized("/./git.", "/git."));
-	must_fail(ensure_file_path_normalized("/git./", NULL));
-	must_fail(ensure_file_path_normalized("/", NULL));
-	must_fail(ensure_file_path_normalized("/.", NULL));
-	must_fail(ensure_file_path_normalized("/./", NULL));
-	must_fail(ensure_file_path_normalized("/./.", NULL));
-	must_fail(ensure_file_path_normalized("/./..", NULL));
-	must_fail(ensure_file_path_normalized("/../.", NULL));
-	must_fail(ensure_file_path_normalized("/./.././/", NULL));
-	must_fail(ensure_file_path_normalized("/dir/..", NULL));
-	must_fail(ensure_file_path_normalized("/dir/sub/../..", NULL));
-	must_fail(ensure_file_path_normalized("/dir/sub/..///..", NULL));
-	must_fail(ensure_file_path_normalized("/dir/sub///../..", NULL));
-	must_fail(ensure_file_path_normalized("/dir/sub///..///..", NULL));
-	must_fail(ensure_file_path_normalized("/dir/sub/../../..", NULL));
-	must_pass(ensure_file_path_normalized("/dir", "/dir"));
-	must_fail(ensure_file_path_normalized("/dir//", NULL));
-	must_pass(ensure_file_path_normalized("/./dir", "/dir"));
-	must_fail(ensure_file_path_normalized("/dir/.", NULL));
-	must_fail(ensure_file_path_normalized("/dir///./", NULL));
-	must_fail(ensure_file_path_normalized("/dir/sub/..", NULL));
-	must_fail(ensure_file_path_normalized("/dir//sub/..",NULL));
-	must_fail(ensure_file_path_normalized("/dir//sub/../", NULL));
-	must_fail(ensure_file_path_normalized("/dir/sub/../", NULL));
-	must_fail(ensure_file_path_normalized("/dir/sub/../.", NULL));
-	must_fail(ensure_file_path_normalized("/dir/s1/../s2/", NULL));
-	must_fail(ensure_file_path_normalized("/d1/s1///s2/..//../s3/", NULL));
-	must_pass(ensure_file_path_normalized("/d1/s1//../s2/../../d2", "/d2"));
-	must_fail(ensure_file_path_normalized("/dir/sub/../", NULL));
-	must_fail(ensure_file_path_normalized("/....", NULL));
-	must_fail(ensure_file_path_normalized("/...", NULL));
-	must_fail(ensure_file_path_normalized("/./...", NULL));
-	must_fail(ensure_file_path_normalized("/d1/...", NULL));
-	must_fail(ensure_file_path_normalized("/d1/.../", NULL));
-	must_fail(ensure_file_path_normalized("/d1/.../d2", NULL));
+	must_pass(ensure_file_path_normalized("/a", "/a", ROOTED_PATH));
+	must_pass(ensure_file_path_normalized("/./testrepo.git", "/testrepo.git", ROOTED_PATH));
+	must_pass(ensure_file_path_normalized("/./.git", "/.git", ROOTED_PATH));
+	must_pass(ensure_file_path_normalized("/./git.", "/git.", ROOTED_PATH));
+	must_fail(ensure_file_path_normalized("/git./", NULL, 0));
+	must_fail(ensure_file_path_normalized("/", NULL, 0));
+	must_fail(ensure_file_path_normalized("/.", NULL, 0));
+	must_fail(ensure_file_path_normalized("/./", NULL, 0));
+	must_fail(ensure_file_path_normalized("/./.", NULL, 0));
+	must_fail(ensure_file_path_normalized("/./..", NULL, 0));
+	must_fail(ensure_file_path_normalized("/../.", NULL, 0));
+	must_fail(ensure_file_path_normalized("/./.././/", NULL, 0));
+	must_fail(ensure_file_path_normalized("/dir/..", NULL, 0));
+	must_fail(ensure_file_path_normalized("/dir/sub/../..", NULL, 0));
+	must_fail(ensure_file_path_normalized("/dir/sub/..///..", NULL, 0));
+	must_fail(ensure_file_path_normalized("/dir/sub///../..", NULL, 0));
+	must_fail(ensure_file_path_normalized("/dir/sub///..///..", NULL, 0));
+	must_fail(ensure_file_path_normalized("/dir/sub/../../..", NULL, 0));
+	must_pass(ensure_file_path_normalized("/dir", "/dir", 0));
+	must_fail(ensure_file_path_normalized("/dir//", NULL, 0));
+	must_pass(ensure_file_path_normalized("/./dir", "/dir", 0));
+	must_fail(ensure_file_path_normalized("/dir/.", NULL, 0));
+	must_fail(ensure_file_path_normalized("/dir///./", NULL, 0));
+	must_fail(ensure_file_path_normalized("/dir/sub/..", NULL, 0));
+	must_fail(ensure_file_path_normalized("/dir//sub/..",NULL, 0));
+	must_fail(ensure_file_path_normalized("/dir//sub/../", NULL, 0));
+	must_fail(ensure_file_path_normalized("/dir/sub/../", NULL, 0));
+	must_fail(ensure_file_path_normalized("/dir/sub/../.", NULL, 0));
+	must_fail(ensure_file_path_normalized("/dir/s1/../s2/", NULL, 0));
+	must_fail(ensure_file_path_normalized("/d1/s1///s2/..//../s3/", NULL, 0));
+	must_pass(ensure_file_path_normalized("/d1/s1//../s2/../../d2", "/d2", 0));
+	must_fail(ensure_file_path_normalized("/dir/sub/../", NULL, 0));
+	must_fail(ensure_file_path_normalized("/....", NULL, 0));
+	must_fail(ensure_file_path_normalized("/...", NULL, 0));
+	must_fail(ensure_file_path_normalized("/./...", NULL, 0));
+	must_fail(ensure_file_path_normalized("/d1/...", NULL, 0));
+	must_fail(ensure_file_path_normalized("/d1/.../", NULL, 0));
+	must_fail(ensure_file_path_normalized("/d1/.../d2", NULL, 0));
 END_TEST
 
-BEGIN_TEST("path", dir_path_prettifying)
-	must_pass(ensure_dir_path_normalized("./testrepo.git", "testrepo.git/"));
-	must_pass(ensure_dir_path_normalized("./.git", ".git/"));
-	must_pass(ensure_dir_path_normalized("./git.", "git./"));
-	must_pass(ensure_dir_path_normalized("git./", "git./"));
-	must_pass(ensure_dir_path_normalized("", ""));
-	must_pass(ensure_dir_path_normalized(".", ""));
-	must_pass(ensure_dir_path_normalized("./", ""));
-	must_pass(ensure_dir_path_normalized("./.", ""));
-	must_fail(ensure_dir_path_normalized("./..", NULL));
-	must_fail(ensure_dir_path_normalized("../.", NULL));
-	must_fail(ensure_dir_path_normalized("./.././/", NULL));
-	must_pass(ensure_dir_path_normalized("dir/..", ""));
-	must_pass(ensure_dir_path_normalized("dir/sub/../..", ""));
-	must_pass(ensure_dir_path_normalized("dir/sub/..///..", ""));
-	must_pass(ensure_dir_path_normalized("dir/sub///../..", ""));
-	must_pass(ensure_dir_path_normalized("dir/sub///..///..", ""));
-	must_fail(ensure_dir_path_normalized("dir/sub/../../..", NULL));
-	must_pass(ensure_dir_path_normalized("dir", "dir/"));
-	must_pass(ensure_dir_path_normalized("dir//", "dir/"));
-	must_pass(ensure_dir_path_normalized("./dir", "dir/"));
-	must_pass(ensure_dir_path_normalized("dir/.", "dir/"));
-	must_pass(ensure_dir_path_normalized("dir///./", "dir/"));
-	must_pass(ensure_dir_path_normalized("dir/sub/..", "dir/"));
-	must_pass(ensure_dir_path_normalized("dir//sub/..", "dir/"));
-	must_pass(ensure_dir_path_normalized("dir//sub/../", "dir/"));
-	must_pass(ensure_dir_path_normalized("dir/sub/../", "dir/"));
-	must_pass(ensure_dir_path_normalized("dir/sub/../.", "dir/"));
-	must_pass(ensure_dir_path_normalized("dir/s1/../s2/", "dir/s2/"));
-	must_pass(ensure_dir_path_normalized("d1/s1///s2/..//../s3/", "d1/s3/"));
-	must_pass(ensure_dir_path_normalized("d1/s1//../s2/../../d2", "d2/"));
-	must_pass(ensure_dir_path_normalized("dir/sub/../", "dir/"));
-	must_fail(ensure_dir_path_normalized("....", NULL));
-	must_fail(ensure_dir_path_normalized("...", NULL));
-	must_fail(ensure_dir_path_normalized("./...", NULL));
-	must_fail(ensure_dir_path_normalized("d1/...", NULL));
-	must_fail(ensure_dir_path_normalized("d1/.../", NULL));
-	must_fail(ensure_dir_path_normalized("d1/.../d2", NULL));
+BEGIN_TEST(path4, "validate and prettify a path to a folder")
+	must_pass(ensure_dir_path_normalized("./testrepo.git", "testrepo.git/", CWD_AS_PREFIX | PATH_AS_SUFFIX));
+	must_pass(ensure_dir_path_normalized("./.git", ".git/", CWD_AS_PREFIX | PATH_AS_SUFFIX));
+	must_pass(ensure_dir_path_normalized("./git.", "git./", CWD_AS_PREFIX | PATH_AS_SUFFIX));
+	must_pass(ensure_dir_path_normalized("git./", "git./", CWD_AS_PREFIX | PATH_AS_SUFFIX));
+	must_pass(ensure_dir_path_normalized("", "", CWD_AS_PREFIX | PATH_AS_SUFFIX));
+	must_pass(ensure_dir_path_normalized(".", "", CWD_AS_PREFIX | PATH_AS_SUFFIX));
+	must_pass(ensure_dir_path_normalized("./", "", CWD_AS_PREFIX | PATH_AS_SUFFIX));
+	must_pass(ensure_dir_path_normalized("./.", "", CWD_AS_PREFIX | PATH_AS_SUFFIX));
+	must_pass(ensure_dir_path_normalized("dir/..", "", CWD_AS_PREFIX | PATH_AS_SUFFIX));
+	must_pass(ensure_dir_path_normalized("dir/sub/../..", "", CWD_AS_PREFIX | PATH_AS_SUFFIX));
+	must_pass(ensure_dir_path_normalized("dir/sub/..///..", "", CWD_AS_PREFIX | PATH_AS_SUFFIX));
+	must_pass(ensure_dir_path_normalized("dir/sub///../..", "", CWD_AS_PREFIX | PATH_AS_SUFFIX));
+	must_pass(ensure_dir_path_normalized("dir/sub///..///..", "", CWD_AS_PREFIX | PATH_AS_SUFFIX));
+	must_pass(ensure_dir_path_normalized("dir", "dir/", CWD_AS_PREFIX | PATH_AS_SUFFIX));
+	must_pass(ensure_dir_path_normalized("dir//", "dir/", CWD_AS_PREFIX | PATH_AS_SUFFIX));
+	must_pass(ensure_dir_path_normalized("./dir", "dir/", CWD_AS_PREFIX | PATH_AS_SUFFIX));
+	must_pass(ensure_dir_path_normalized("dir/.", "dir/", CWD_AS_PREFIX | PATH_AS_SUFFIX));
+	must_pass(ensure_dir_path_normalized("dir///./", "dir/", CWD_AS_PREFIX | PATH_AS_SUFFIX));
+	must_pass(ensure_dir_path_normalized("dir/sub/..", "dir/", CWD_AS_PREFIX | PATH_AS_SUFFIX));
+	must_pass(ensure_dir_path_normalized("dir//sub/..", "dir/", CWD_AS_PREFIX | PATH_AS_SUFFIX));
+	must_pass(ensure_dir_path_normalized("dir//sub/../", "dir/", CWD_AS_PREFIX | PATH_AS_SUFFIX));
+	must_pass(ensure_dir_path_normalized("dir/sub/../", "dir/", CWD_AS_PREFIX | PATH_AS_SUFFIX));
+	must_pass(ensure_dir_path_normalized("dir/sub/../.", "dir/", CWD_AS_PREFIX | PATH_AS_SUFFIX));
+	must_pass(ensure_dir_path_normalized("dir/s1/../s2/", "dir/s2/", CWD_AS_PREFIX | PATH_AS_SUFFIX));
+	must_pass(ensure_dir_path_normalized("d1/s1///s2/..//../s3/", "d1/s3/", CWD_AS_PREFIX | PATH_AS_SUFFIX));
+	must_pass(ensure_dir_path_normalized("d1/s1//../s2/../../d2", "d2/", CWD_AS_PREFIX | PATH_AS_SUFFIX));
+	must_pass(ensure_dir_path_normalized("dir/sub/../", "dir/", CWD_AS_PREFIX | PATH_AS_SUFFIX));
+	must_pass(ensure_dir_path_normalized("../../a/../../b/c/d/../../e", "b/e/", PATH_AS_SUFFIX));
+	must_fail(ensure_dir_path_normalized("....", NULL, 0));
+	must_fail(ensure_dir_path_normalized("...", NULL, 0));
+	must_fail(ensure_dir_path_normalized("./...", NULL, 0));
+	must_fail(ensure_dir_path_normalized("d1/...", NULL, 0));
+	must_fail(ensure_dir_path_normalized("d1/.../", NULL, 0));
+	must_fail(ensure_dir_path_normalized("d1/.../d2", NULL, 0));
 
-	must_pass(ensure_dir_path_normalized("/./testrepo.git", "/testrepo.git/"));
-	must_pass(ensure_dir_path_normalized("/./.git", "/.git/"));
-	must_pass(ensure_dir_path_normalized("/./git.", "/git./"));
-	must_pass(ensure_dir_path_normalized("/git./", "/git./"));
-	must_pass(ensure_dir_path_normalized("/", "/"));
-	must_pass(ensure_dir_path_normalized("//", "/"));
-	must_pass(ensure_dir_path_normalized("///", "/"));
-	must_pass(ensure_dir_path_normalized("/.", "/"));
-	must_pass(ensure_dir_path_normalized("/./", "/"));
-	must_fail(ensure_dir_path_normalized("/./..", NULL));
-	must_fail(ensure_dir_path_normalized("/../.", NULL));
-	must_fail(ensure_dir_path_normalized("/./.././/", NULL));
-	must_pass(ensure_dir_path_normalized("/dir/..", "/"));
-	must_pass(ensure_dir_path_normalized("/dir/sub/../..", "/"));
-	must_fail(ensure_dir_path_normalized("/dir/sub/../../..", NULL));
-	must_pass(ensure_dir_path_normalized("/dir", "/dir/"));
-	must_pass(ensure_dir_path_normalized("/dir//", "/dir/"));
-	must_pass(ensure_dir_path_normalized("/./dir", "/dir/"));
-	must_pass(ensure_dir_path_normalized("/dir/.", "/dir/"));
-	must_pass(ensure_dir_path_normalized("/dir///./", "/dir/"));
-	must_pass(ensure_dir_path_normalized("/dir//sub/..", "/dir/"));
-	must_pass(ensure_dir_path_normalized("/dir/sub/../", "/dir/"));
-	must_pass(ensure_dir_path_normalized("//dir/sub/../.", "/dir/"));
-	must_pass(ensure_dir_path_normalized("/dir/s1/../s2/", "/dir/s2/"));
-	must_pass(ensure_dir_path_normalized("/d1/s1///s2/..//../s3/", "/d1/s3/"));
-	must_pass(ensure_dir_path_normalized("/d1/s1//../s2/../../d2", "/d2/"));
-	must_fail(ensure_dir_path_normalized("/....", NULL));
-	must_fail(ensure_dir_path_normalized("/...", NULL));
-	must_fail(ensure_dir_path_normalized("/./...", NULL));
-	must_fail(ensure_dir_path_normalized("/d1/...", NULL));
-	must_fail(ensure_dir_path_normalized("/d1/.../", NULL));
-	must_fail(ensure_dir_path_normalized("/d1/.../d2", NULL));
+	must_pass(ensure_dir_path_normalized("/./testrepo.git", "/testrepo.git/", ROOTED_PATH));
+	must_pass(ensure_dir_path_normalized("/./.git", "/.git/", ROOTED_PATH));
+	must_pass(ensure_dir_path_normalized("/./git.", "/git./", ROOTED_PATH));
+	must_pass(ensure_dir_path_normalized("/git./", "/git./", ROOTED_PATH));
+	must_pass(ensure_dir_path_normalized("/", "/", ROOTED_PATH));
+	must_pass(ensure_dir_path_normalized("//", "/", ROOTED_PATH));
+	must_pass(ensure_dir_path_normalized("///", "/", ROOTED_PATH));
+	must_pass(ensure_dir_path_normalized("/.", "/", ROOTED_PATH));
+	must_pass(ensure_dir_path_normalized("/./", "/", ROOTED_PATH));
+	must_fail(ensure_dir_path_normalized("/./..", NULL, 0));
+	must_fail(ensure_dir_path_normalized("/../.", NULL, 0));
+	must_fail(ensure_dir_path_normalized("/./.././/", NULL, 0));
+	must_pass(ensure_dir_path_normalized("/dir/..", "/", 0));
+	must_pass(ensure_dir_path_normalized("/dir/sub/../..", "/", 0));
+	must_fail(ensure_dir_path_normalized("/dir/sub/../../..", NULL, 0));
+	must_pass(ensure_dir_path_normalized("/dir", "/dir/", ROOTED_PATH));
+	must_pass(ensure_dir_path_normalized("/dir//", "/dir/", ROOTED_PATH));
+	must_pass(ensure_dir_path_normalized("/./dir", "/dir/", ROOTED_PATH));
+	must_pass(ensure_dir_path_normalized("/dir/.", "/dir/", ROOTED_PATH));
+	must_pass(ensure_dir_path_normalized("/dir///./", "/dir/", ROOTED_PATH));
+	must_pass(ensure_dir_path_normalized("/dir//sub/..", "/dir/", ROOTED_PATH));
+	must_pass(ensure_dir_path_normalized("/dir/sub/../", "/dir/", ROOTED_PATH));
+	must_pass(ensure_dir_path_normalized("//dir/sub/../.", "/dir/", ROOTED_PATH));
+	must_pass(ensure_dir_path_normalized("/dir/s1/../s2/", "/dir/s2/", ROOTED_PATH));
+	must_pass(ensure_dir_path_normalized("/d1/s1///s2/..//../s3/", "/d1/s3/", ROOTED_PATH));
+	must_pass(ensure_dir_path_normalized("/d1/s1//../s2/../../d2", "/d2/", ROOTED_PATH));
+	must_fail(ensure_dir_path_normalized("/....", NULL, 0));
+	must_fail(ensure_dir_path_normalized("/...", NULL, 0));
+	must_fail(ensure_dir_path_normalized("/./...", NULL, 0));
+	must_fail(ensure_dir_path_normalized("/d1/...", NULL, 0));
+	must_fail(ensure_dir_path_normalized("/d1/.../", NULL, 0));
+	must_fail(ensure_dir_path_normalized("/d1/.../d2", NULL, 0));
 END_TEST
 
 static int ensure_joinpath(const char *path_a, const char *path_b, const char *expected_path)
@@ -349,10 +358,12 @@ static int ensure_joinpath(const char *path_a, const char *path_b, const char *e
 	return strcmp(joined_path, expected_path) == 0 ? GIT_SUCCESS : GIT_ERROR;
 }
 
-BEGIN_TEST("path", joinpath)
-	must_pass(ensure_joinpath("", "", "/"));
-	must_pass(ensure_joinpath("", "a", "/a"));
+BEGIN_TEST(path5, "properly join path components")
+	must_pass(ensure_joinpath("", "", ""));
+	must_pass(ensure_joinpath("", "a", "a"));
+	must_pass(ensure_joinpath("", "/a", "/a"));
 	must_pass(ensure_joinpath("a", "", "a/"));
+	must_pass(ensure_joinpath("a", "/", "a/"));
 	must_pass(ensure_joinpath("a", "b", "a/b"));
 	must_pass(ensure_joinpath("/", "a", "/a"));
 	must_pass(ensure_joinpath("/", "", "/"));
@@ -360,6 +371,53 @@ BEGIN_TEST("path", joinpath)
 	must_pass(ensure_joinpath("/a", "/b/", "/a/b/"));
 	must_pass(ensure_joinpath("/a/", "b/", "/a/b/"));
 	must_pass(ensure_joinpath("/a/", "/b/", "/a/b/"));
+END_TEST
+
+static int ensure_joinpath_n(const char *path_a, const char *path_b, const char *path_c, const char *path_d, const char *expected_path)
+{
+	char joined_path[GIT_PATH_MAX];
+	git__joinpath_n(joined_path, 4, path_a, path_b, path_c, path_d);
+	return strcmp(joined_path, expected_path) == 0 ? GIT_SUCCESS : GIT_ERROR;
+}
+
+BEGIN_TEST(path6, "properly join path components for more than one path")
+	must_pass(ensure_joinpath_n("", "", "", "", ""));
+	must_pass(ensure_joinpath_n("", "a", "", "", "a/"));
+	must_pass(ensure_joinpath_n("a", "", "", "", "a/"));
+	must_pass(ensure_joinpath_n("", "", "", "a", "a"));
+	must_pass(ensure_joinpath_n("a", "b", "", "/c/d/", "a/b/c/d/"));
+	must_pass(ensure_joinpath_n("a", "b", "", "/c/d", "a/b/c/d"));
+END_TEST
+
+static int count_number_of_path_segments(const char *path)
+{
+	int number = 0;
+	char *current = (char *)path;
+
+	while (*current)
+	{
+		if (*current++ == '/')
+			number++;
+	}
+
+	assert (number > 0);
+
+	return --number;
+}
+
+BEGIN_TEST(path7, "prevent a path which escapes the root directory from being prettified")
+	char current_workdir[GIT_PATH_MAX];
+	char prettified[GIT_PATH_MAX];
+	int i = 0, number_to_escape;
+
+	must_pass(gitfo_getcwd(current_workdir, sizeof(current_workdir)));
+
+	number_to_escape = count_number_of_path_segments(current_workdir);
+
+	for (i = 0; i < number_to_escape + 1; i++)
+		git__joinpath(current_workdir, current_workdir, "../");
+
+	must_fail(gitfo_prettify_dir_path(prettified, sizeof(prettified), current_workdir));
 END_TEST
 
 typedef struct name_data {
@@ -483,7 +541,7 @@ static walk_data dot = {
 	dot_names
 };
 
-BEGIN_TEST("dirent", dot)
+BEGIN_TEST(dirent0, "make sure that the '.' folder is not traversed")
 
 	must_pass(setup(&dot));
 
@@ -508,7 +566,7 @@ static walk_data sub = {
 	sub_names
 };
 
-BEGIN_TEST("dirent", sub)
+BEGIN_TEST(dirent1, "traverse a subfolder")
 
 	must_pass(setup(&sub));
 
@@ -527,7 +585,7 @@ static walk_data sub_slash = {
 	sub_names
 };
 
-BEGIN_TEST("dirent", sub_slash)
+BEGIN_TEST(dirent2, "traverse a slash-terminated subfolder")
 
 	must_pass(setup(&sub_slash));
 
@@ -556,7 +614,7 @@ static int dont_call_me(void *GIT_UNUSED(state), char *GIT_UNUSED(path))
 	return GIT_ERROR;
 }
 
-BEGIN_TEST("dirent", empty)
+BEGIN_TEST(dirent3, "make sure that empty folders are not traversed")
 
 	must_pass(setup(&empty));
 
@@ -589,7 +647,7 @@ static walk_data odd = {
 	odd_names
 };
 
-BEGIN_TEST("dirent", odd)
+BEGIN_TEST(dirent4, "make sure that strange looking filenames ('..c') are traversed")
 
 	must_pass(setup(&odd));
 
@@ -604,30 +662,25 @@ BEGIN_TEST("dirent", odd)
 END_TEST
 
 
-git_testsuite *libgit2_suite_core(void)
-{
-	git_testsuite *suite = git_testsuite_new("Core");
+BEGIN_SUITE(core)
+	ADD_TEST(string0);
+	ADD_TEST(string1);
 
-	ADD_TEST(suite, "refcnt", init_inc2_dec2_free);
+	ADD_TEST(vector0);
+	ADD_TEST(vector1);
 
-	ADD_TEST(suite, "strutil", prefix_comparison);
-	ADD_TEST(suite, "strutil", suffix_comparison);
-	ADD_TEST(suite, "strutil", dirname);
-	ADD_TEST(suite, "strutil", basename);
-	ADD_TEST(suite, "strutil", topdir);
+	ADD_TEST(path0);
+	ADD_TEST(path1);
+	ADD_TEST(path2);
+	ADD_TEST(path3);
+	ADD_TEST(path4);
+	ADD_TEST(path5);
+	ADD_TEST(path6);
+	ADD_TEST(path7);
 
-	ADD_TEST(suite, "vector", initial_size_one);
-	ADD_TEST(suite, "vector", remove);
-
-	ADD_TEST(suite, "path", file_path_prettifying);
-	ADD_TEST(suite, "path", dir_path_prettifying);
-	ADD_TEST(suite, "path", joinpath);
-
-	ADD_TEST(suite, "dirent", dot);
-	ADD_TEST(suite, "dirent", sub);
-	ADD_TEST(suite, "dirent", sub_slash);
-	ADD_TEST(suite, "dirent", empty);
-	ADD_TEST(suite, "dirent", odd);
-
-	return suite;
-}
+	ADD_TEST(dirent0);
+	ADD_TEST(dirent1);
+	ADD_TEST(dirent2);
+	ADD_TEST(dirent3);
+	ADD_TEST(dirent4);
+END_SUITE

@@ -3,6 +3,15 @@
 #include <stdarg.h>
 #include <stdio.h>
 
+void git_strarray_free(git_strarray *array)
+{
+	size_t i;
+	for (i = 0; i < array->count; ++i)
+		free(array->strings[i]);
+
+	free(array->strings);
+}
+
 int git__fmt(char *buf, size_t buf_sz, const char *fmt, ...)
 {
 	va_list va;
@@ -82,7 +91,7 @@ Exit:
 	}
 
 	if (len >= 0) {
-		memcpy(buffer, startp, len);
+		memmove(buffer, startp, len);
 		buffer[len] = 0;
 	}
 	return result;
@@ -140,7 +149,7 @@ Exit:
     }
 
     if (len >= 0) {
-        memcpy(buffer, path, len);
+        memmove(buffer, path, len);
         buffer[len] = 0;
     }
     return result;
@@ -206,6 +215,7 @@ void git__joinpath_n(char *buffer_out, int count, ...)
 {
 	va_list ap;
 	int i;
+	char *buffer_start = buffer_out;
 
 	va_start(ap, count);
 	for (i = 0; i < count; ++i) {
@@ -213,11 +223,17 @@ void git__joinpath_n(char *buffer_out, int count, ...)
 		int len;
 
 		path = va_arg(ap, const char *);
-		if (i > 0 && *path == '/')
+
+		assert((i == 0) || path != buffer_start);
+
+		if (i > 0 && *path == '/' && buffer_out > buffer_start && buffer_out[-1] == '/')
 			path++;
 
+		if (!*path)
+			continue;
+
 		len = strlen(path);
-		memcpy(buffer_out, path, len);
+		memmove(buffer_out, path, len);
 		buffer_out = buffer_out + len;
 
 		if (i < count - 1 && buffer_out[-1] != '/')

@@ -179,10 +179,14 @@ void git_hashtable_free(git_hashtable *self)
 }
 
 
-int git_hashtable_insert(git_hashtable *self, const void *key, void *value)
+int git_hashtable_insert2(git_hashtable *self, const void *key, void *value, void **old_value)
 {
 	int hash_id;
 	git_hashtable_node *node;
+
+	assert(self && self->nodes);
+
+	*old_value = NULL;
 
 	for (hash_id = 0; hash_id < GIT_HASHTABLE_HASHES; ++hash_id) {
 		node = node_with_hash(self, key, hash_id);
@@ -195,6 +199,8 @@ int git_hashtable_insert(git_hashtable *self, const void *key, void *value)
 		}
 
 		if (key == node->key || self->key_equal(key, node->key) == 0) {
+			*old_value = node->value;
+			node->key = key;
 			node->value = value;
 			return GIT_SUCCESS;
 		}
@@ -214,6 +220,8 @@ void *git_hashtable_lookup(git_hashtable *self, const void *key)
 	int hash_id;
 	git_hashtable_node *node;
 
+	assert(self && self->nodes);
+
 	for (hash_id = 0; hash_id < GIT_HASHTABLE_HASHES; ++hash_id) {
 		node = node_with_hash(self, key, hash_id);
 		if (node->key && self->key_equal(key, node->key) == 0)
@@ -228,6 +236,8 @@ int git_hashtable_remove(git_hashtable *self, const void *key)
 	int hash_id;
 	git_hashtable_node *node;
 
+	assert(self && self->nodes);
+
 	for (hash_id = 0; hash_id < GIT_HASHTABLE_HASHES; ++hash_id) {
 		node = node_with_hash(self, key, hash_id);
 		if (node->key && self->key_equal(key, node->key) == 0) {
@@ -239,5 +249,13 @@ int git_hashtable_remove(git_hashtable *self, const void *key)
 	}
 
 	return GIT_ENOTFOUND;
+}
+
+int git_hashtable_merge(git_hashtable *self, git_hashtable *other)
+{
+	if (resize_to(self, (self->size + other->size) * 2) < GIT_SUCCESS)
+		return GIT_ENOMEM;
+
+	return insert_nodes(self, other->nodes, other->key_count);
 }
 

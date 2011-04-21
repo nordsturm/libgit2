@@ -74,7 +74,7 @@ struct entry_short {
 	uint32_t file_size;
 	git_oid oid;
 	uint16_t flags;
-	char path[1]; /* arbritrary length */
+	char path[1]; /* arbitrary length */
 };
 
 struct entry_long {
@@ -89,7 +89,7 @@ struct entry_long {
 	git_oid oid;
 	uint16_t flags;
 	uint16_t flags_extended;
-	char path[1]; /* arbritrary length */
+	char path[1]; /* arbitrary length */
 };
 
 /* local declarations */
@@ -141,17 +141,14 @@ static int index_initialize(git_index **index_out, git_repository *owner, const 
 
 	index->repository = owner;
 
-	git_vector_init(&index->entries, 32, index_cmp, index_srch);
-
-	/* the index is empty; the index is sorted */
-	index->sorted = 1;
+	git_vector_init(&index->entries, 32, index_cmp);
 
 	/* Check if index file is stored on disk already */
 	if (gitfo_exists(index->index_file_path) == 0)
 		index->on_disk = 1;
 
 	*index_out = index;
-	return GIT_SUCCESS;
+	return git_index_read(index);
 }
 
 int git_index_open_bare(git_index **index_out, const char *index_path)
@@ -169,7 +166,7 @@ int git_index_open_inrepo(git_index **index_out, git_repository *repo)
 
 void git_index_free(git_index *index)
 {
-	if (index == NULL)
+	if (index == NULL || index->repository != NULL)
 		return;
 
 	git_index_clear(index);
@@ -209,7 +206,6 @@ void git_index_clear(git_index *index)
 
 	git_vector_clear(&index->entries);
 	index->last_modified = 0;
-	index->sorted = 1;
 
 	free_tree(index->tree);
 	index->tree = NULL;
@@ -259,8 +255,7 @@ int git_index_write(git_index *index)
 	struct stat indexst;
 	int error;
 
-	if (!index->sorted)
-		sort_index(index);
+	sort_index(index);
 
 	if ((error = git_filebuf_open(&file, index->index_file_path, GIT_FILEBUF_HASH_CONTENTS)) < GIT_SUCCESS)
 		return error;
@@ -317,8 +312,8 @@ int git_index_add(git_index *index, const char *rel_path, int stage)
 
 	memset(&entry, 0x0, sizeof(git_index_entry));
 
-	entry.ctime.seconds = st.st_ctime;
-	entry.mtime.seconds = st.st_mtime;
+	entry.ctime.seconds = (git_time_t)st.st_ctime;
+	entry.mtime.seconds = (git_time_t)st.st_mtime;
 	/* entry.mtime.nanoseconds = st.st_mtimensec; */
 	/* entry.ctime.nanoseconds = st.st_ctimensec; */
 	entry.dev= st.st_rdev;
@@ -329,7 +324,7 @@ int git_index_add(git_index *index, const char *rel_path, int stage)
 	entry.file_size = st.st_size;
 
 	/* write the blob to disk and get the oid */
-	if ((error = git_blob_writefile(&entry.oid, index->repository, full_path)) < GIT_SUCCESS)
+	if ((error = git_blob_create_fromfile(&entry.oid, index->repository, rel_path)) < GIT_SUCCESS)
 		return error;
 
 	entry.flags |= (stage << GIT_IDXENTRY_STAGESHIFT);
@@ -340,10 +335,7 @@ int git_index_add(git_index *index, const char *rel_path, int stage)
 
 void sort_index(git_index *index)
 {
-	if (index->sorted == 0) {
-		git_vector_sort(&index->entries);
-		index->sorted = 1;
-	}
+	git_vector_sort(&index->entries);
 }
 
 int git_index_insert(git_index *index, const git_index_entry *source_entry)
@@ -388,8 +380,6 @@ int git_index_insert(git_index *index, const git_index_entry *source_entry)
 		if (git_vector_insert(&index->entries, entry) < GIT_SUCCESS)
 			return GIT_ENOMEM;
 
-		index->sorted = 0;
-
 	/* if a previous entry exists, replace it */
 	} else {
 		git_index_entry **entry_array = (git_index_entry **)index->entries.contents;
@@ -413,7 +403,7 @@ int git_index_remove(git_index *index, int position)
 int git_index_find(git_index *index, const char *path)
 {
 	sort_index(index);
-	return git_vector_search(&index->entries, path);
+	return git_vector_bsearch2(&index->entries, index_srch, path);
 }
 
 static git_index_tree *read_tree_internal(
@@ -501,10 +491,10 @@ static size_t read_entry(git_index_entry *dest, const void *buffer, size_t buffe
 
 	source = (const struct entry_short *)(buffer);
 
-	dest->ctime.seconds = (time_t)ntohl(source->ctime.seconds);
-	dest->ctime.nanoseconds = (time_t)ntohl(source->ctime.nanoseconds);
-	dest->mtime.seconds = (time_t)ntohl(source->mtime.seconds);
-	dest->mtime.nanoseconds = (time_t)ntohl(source->mtime.nanoseconds);
+	dest->ctime.seconds = (git_time_t)ntohl(source->ctime.seconds);
+	dest->ctime.nanoseconds = ntohl(source->ctime.nanoseconds);
+	dest->mtime.seconds = (git_time_t)ntohl(source->mtime.seconds);
+	dest->mtime.nanoseconds = ntohl(source->mtime.nanoseconds);
 	dest->dev = ntohl(source->dev);
 	dest->ino = ntohl(source->ino);
 	dest->mode = ntohl(source->mode);
@@ -678,6 +668,9 @@ static int parse_index(git_index *index, const char *buffer, size_t buffer_size)
 
 #undef seek_forward
 
+	/* force sorting in the vector: the entries are
+	 * assured to be sorted on the index */
+	index->entries.sorted = 1;
 	return GIT_SUCCESS;
 }
 

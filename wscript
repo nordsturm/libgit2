@@ -16,7 +16,7 @@ CFLAGS_WIN32_L = ['/RELEASE']  # used for /both/ debug and release builds.
                                # sets the module's checksum in the header.
 CFLAGS_WIN32_L_DBG = ['/DEBUG']
 
-ALL_LIBS = ['z', 'crypto', 'pthread', 'sqlite3']
+ALL_LIBS = ['crypto', 'pthread', 'sqlite3']
 
 def options(opt):
     opt.load('compiler_c')
@@ -29,8 +29,10 @@ PPC optimized version (ppc) or the SHA1 functions from OpenSSL (openssl)")
         help='Force a specific MSVC++ version (7.1, 8.0, 9.0, 10.0), if more than one is installed')
     opt.add_option('--arch', action='store', default='x86',
         help='Select target architecture (ia64, x64, x86, x86_amd64, x86_ia64)')
-    opt.add_option('--without-sqlite', action='store_false', default=True,
+    opt.add_option('--with-sqlite', action='store_true', default=False,
         dest='use_sqlite', help='Disable sqlite support')
+    opt.add_option('--threadsafe', action='store_true', default=False,
+        help='Make libgit2 thread-safe (requires pthreads)')
 
 def configure(conf):
 
@@ -44,7 +46,6 @@ def configure(conf):
     conf.load('compiler_c')
 
     dbg = conf.options.debug
-    zlib_name = 'z'
 
     conf.env.CFLAGS = CFLAGS_UNIX + (CFLAGS_UNIX_DBG if dbg else [])
 
@@ -56,17 +57,15 @@ def configure(conf):
               (CFLAGS_WIN32_DBG if dbg else CFLAGS_WIN32_RELEASE)
             conf.env.LINKFLAGS += CFLAGS_WIN32_L + \
               (CFLAGS_WIN32_L_DBG if dbg else [])
-            conf.env.DEFINES += ['WIN32', '_DEBUG', '_LIB', 'ZLIB_WINAPI']
-            zlib_name = 'zlibwapi'
-
-        elif conf.env.CC_NAME == 'gcc':
-            conf.check_cc(lib='pthread', uselib_store='pthread')
+            conf.env.DEFINES += ['WIN32', '_DEBUG', '_LIB']
 
     else:
         conf.env.PLATFORM = 'unix'
 
-    # check for Z lib
-    conf.check_cc(lib=zlib_name, uselib_store='z', install_path=None)
+    if conf.options.threadsafe:
+        if conf.env.PLATFORM == 'unix':
+            conf.check_cc(lib='pthread', uselib_store='pthread')
+        conf.env.DEFINES += ['GIT_THREADS']
 
     # check for sqlite3
     if conf.options.use_sqlite and conf.check_cc(
@@ -74,7 +73,7 @@ def configure(conf):
         conf.env.DEFINES += ['GIT2_SQLITE_BACKEND']
 
     if conf.options.sha1 not in ['openssl', 'ppc', 'builtin']:
-        ctx.fatal('Invalid SHA1 option')
+        conf.fatal('Invalid SHA1 option')
 
     # check for libcrypto (openssl) if we are using its SHA1 functions
     if conf.options.sha1 == 'openssl':
@@ -112,10 +111,10 @@ def get_libgit2_version(git2_h):
     line = None
 
     with open(git2_h) as f:
-        line = re.search(r'^#define LIBGIT2_VERSION "(\d\.\d\.\d)"$', f.read(), re.MULTILINE)
+        line = re.search(r'^#define LIBGIT2_VERSION "(\d+\.\d+\.\d+)"$', f.read(), re.MULTILINE)
 
     if line is None:
-        raise "Failed to detect libgit2 version"
+        raise Exception("Failed to detect libgit2 version")
 
     return line.group(1)
 
@@ -132,13 +131,14 @@ def build_library(bld, build_type):
     sources = directory.ant_glob('src/*.c')
 
     # Find the version of the library, from our header file
-    version = get_libgit2_version(directory.find_node("src/git2.h").abspath())
+    version = get_libgit2_version(directory.find_node("include/git2.h").abspath())
 
     # Compile platform-dependant code
     # E.g.  src/unix/*.c
     #       src/win32/*.c
     sources = sources + directory.ant_glob('src/%s/*.c' % bld.env.PLATFORM)
     sources = sources + directory.ant_glob('src/backends/*.c')
+    sources = sources + directory.ant_glob('deps/zlib/*.c')
 
     # SHA1 methods source
     if bld.env.sha1 == "ppc":
@@ -153,7 +153,7 @@ def build_library(bld, build_type):
     BUILD[build_type](
         source=sources,
         target='git2',
-        includes='src',
+        includes=['src', 'include', 'deps/zlib'],
         install_path='${LIBDIR}',
         use=ALL_LIBS,
         vnum=version,
@@ -168,8 +168,8 @@ def build_library(bld, build_type):
         )
 
     # Install headers
-    bld.install_files('${PREFIX}/include', directory.find_node('src/git2.h'))
-    bld.install_files('${PREFIX}/include/git2', directory.ant_glob('src/git2/*.h'))
+    bld.install_files('${PREFIX}/include', directory.find_node('include/git2.h'))
+    bld.install_files('${PREFIX}/include/git2', directory.ant_glob('include/git2/*.h'))
 
     # On Unix systems, let them know about installation
     if bld.env.PLATFORM == 'unix' and bld.cmd == 'install-shared':
@@ -191,7 +191,7 @@ def build_test(bld):
     bld.program(
         source=sources,
         target='libgit2_test',
-        includes=['src', 'tests'],
+        includes=['src', 'tests', 'include'],
         defines=['TEST_RESOURCES="%s"' % resources_path],
         use=['git2'] + ALL_LIBS
     )

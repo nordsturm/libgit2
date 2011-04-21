@@ -24,130 +24,150 @@
  */
 #include "test_lib.h"
 #include "test_helpers.h"
+#include "odb.h"
 
 #include "t02-data.h"
 #include "t02-oids.h"
 
-BEGIN_TEST("readloose", read_loose_commit)
+
+BEGIN_TEST(existsloose0, "check if a loose object exists on the odb")
+    git_odb *db;
+    git_oid id, id2;
+
+    must_pass(write_object_files(odb_dir, &one));
+    must_pass(git_odb_open(&db, odb_dir));
+    must_pass(git_oid_mkstr(&id, one.id));
+
+    must_be_true(git_odb_exists(db, &id));
+
+	/* Test for a non-existant object */
+    must_pass(git_oid_mkstr(&id2, "8b137891791fe96927ad78e64b0aad7bded08baa"));
+    must_be_true(0 == git_odb_exists(db, &id2));
+
+    git_odb_close(db);
+    must_pass(remove_object_files(odb_dir, &one));
+END_TEST
+
+BEGIN_TEST(readloose0, "read a loose commit")
     git_odb *db;
     git_oid id;
-    git_rawobj obj;
+    git_odb_object *obj;
 
     must_pass(write_object_files(odb_dir, &commit));
     must_pass(git_odb_open(&db, odb_dir));
     must_pass(git_oid_mkstr(&id, commit.id));
 
     must_pass(git_odb_read(&obj, db, &id));
-    must_pass(cmp_objects(&obj, &commit));
+    must_pass(cmp_objects((git_rawobj *)&obj->raw, &commit));
 
-    git_rawobj_close(&obj);
+    git_odb_object_close(obj);
     git_odb_close(db);
     must_pass(remove_object_files(odb_dir, &commit));
 END_TEST
 
-BEGIN_TEST("readloose", read_loose_tree)
+BEGIN_TEST(readloose1, "read a loose tree")
     git_odb *db;
     git_oid id;
-    git_rawobj obj;
+    git_odb_object *obj;
 
     must_pass(write_object_files(odb_dir, &tree));
     must_pass(git_odb_open(&db, odb_dir));
     must_pass(git_oid_mkstr(&id, tree.id));
 
     must_pass(git_odb_read(&obj, db, &id));
-    must_pass(cmp_objects(&obj, &tree));
+    must_pass(cmp_objects((git_rawobj *)&obj->raw, &tree));
 
-    git_rawobj_close(&obj);
+    git_odb_object_close(obj);
     git_odb_close(db);
     must_pass(remove_object_files(odb_dir, &tree));
 END_TEST
 
-BEGIN_TEST("readloose", read_loose_tag)
+BEGIN_TEST(readloose2, "read a loose tag")
     git_odb *db;
     git_oid id;
-    git_rawobj obj;
+    git_odb_object *obj;
 
     must_pass(write_object_files(odb_dir, &tag));
     must_pass(git_odb_open(&db, odb_dir));
     must_pass(git_oid_mkstr(&id, tag.id));
 
     must_pass(git_odb_read(&obj, db, &id));
-    must_pass(cmp_objects(&obj, &tag));
+    must_pass(cmp_objects((git_rawobj *)&obj->raw, &tag));
 
-    git_rawobj_close(&obj);
+    git_odb_object_close(obj);
     git_odb_close(db);
     must_pass(remove_object_files(odb_dir, &tag));
 END_TEST
 
-BEGIN_TEST("readloose", read_loose_zero)
+BEGIN_TEST(readloose3, "read a loose zero-bytes object")
     git_odb *db;
     git_oid id;
-    git_rawobj obj;
+    git_odb_object *obj;
 
     must_pass(write_object_files(odb_dir, &zero));
     must_pass(git_odb_open(&db, odb_dir));
     must_pass(git_oid_mkstr(&id, zero.id));
 
     must_pass(git_odb_read(&obj, db, &id));
-    must_pass(cmp_objects(&obj, &zero));
+    must_pass(cmp_objects((git_rawobj *)&obj->raw, &zero));
 
-    git_rawobj_close(&obj);
+    git_odb_object_close(obj);
     git_odb_close(db);
     must_pass(remove_object_files(odb_dir, &zero));
 END_TEST
 
-BEGIN_TEST("readloose", read_loose_one)
+BEGIN_TEST(readloose4, "read a one-byte long loose object")
     git_odb *db;
     git_oid id;
-    git_rawobj obj;
+    git_odb_object *obj;
 
     must_pass(write_object_files(odb_dir, &one));
     must_pass(git_odb_open(&db, odb_dir));
     must_pass(git_oid_mkstr(&id, one.id));
 
     must_pass(git_odb_read(&obj, db, &id));
-    must_pass(cmp_objects(&obj, &one));
+    must_pass(cmp_objects(&obj->raw, &one));
 
-    git_rawobj_close(&obj);
+    git_odb_object_close(obj);
     git_odb_close(db);
     must_pass(remove_object_files(odb_dir, &one));
 END_TEST
 
-BEGIN_TEST("readloose", read_loose_two)
+BEGIN_TEST(readloose5, "read a two-bytes long loose object")
     git_odb *db;
     git_oid id;
-    git_rawobj obj;
+    git_odb_object *obj;
 
     must_pass(write_object_files(odb_dir, &two));
     must_pass(git_odb_open(&db, odb_dir));
     must_pass(git_oid_mkstr(&id, two.id));
 
     must_pass(git_odb_read(&obj, db, &id));
-    must_pass(cmp_objects(&obj, &two));
+    must_pass(cmp_objects(&obj->raw, &two));
 
-    git_rawobj_close(&obj);
+    git_odb_object_close(obj);
     git_odb_close(db);
     must_pass(remove_object_files(odb_dir, &two));
 END_TEST
 
-BEGIN_TEST("readloose", read_loose_some)
+BEGIN_TEST(readloose6, "read a loose object which is several bytes long")
     git_odb *db;
     git_oid id;
-    git_rawobj obj;
+    git_odb_object *obj;
 
     must_pass(write_object_files(odb_dir, &some));
     must_pass(git_odb_open(&db, odb_dir));
     must_pass(git_oid_mkstr(&id, some.id));
 
     must_pass(git_odb_read(&obj, db, &id));
-    must_pass(cmp_objects(&obj, &some));
+    must_pass(cmp_objects(&obj->raw, &some));
 
-    git_rawobj_close(&obj);
+    git_odb_object_close(obj);
     git_odb_close(db);
     must_pass(remove_object_files(odb_dir, &some));
 END_TEST
 
-BEGIN_TEST("readpack", readpacked_test)
+BEGIN_TEST(readpack0, "read several packed objects")
 	unsigned int i;
     git_odb *db;
 
@@ -155,19 +175,19 @@ BEGIN_TEST("readpack", readpacked_test)
 
 	for (i = 0; i < ARRAY_SIZE(packed_objects); ++i) {
 		git_oid id;
-		git_rawobj obj;
+		git_odb_object *obj;
 
 		must_pass(git_oid_mkstr(&id, packed_objects[i]));
 		must_be_true(git_odb_exists(db, &id) == 1);
 		must_pass(git_odb_read(&obj, db, &id));
 
-		git_rawobj_close(&obj);
+		git_odb_object_close(obj);
 	}
 
     git_odb_close(db);
 END_TEST
 
-BEGIN_TEST("readheader", readheader_packed_test)
+BEGIN_TEST(readheader0, "read only the header of several packed objects")
 	unsigned int i;
     git_odb *db;
 
@@ -175,23 +195,25 @@ BEGIN_TEST("readheader", readheader_packed_test)
 
 	for (i = 0; i < ARRAY_SIZE(packed_objects); ++i) {
 		git_oid id;
-		git_rawobj obj, header;
+		git_odb_object *obj;
+		size_t len;
+		git_otype type;
 
 		must_pass(git_oid_mkstr(&id, packed_objects[i]));
 
 		must_pass(git_odb_read(&obj, db, &id));
-		must_pass(git_odb_read_header(&header, db, &id));
+		must_pass(git_odb_read_header(&len, &type, db, &id));
 
-		must_be_true(obj.len == header.len);
-		must_be_true(obj.type == header.type);
+		must_be_true(obj->raw.len == len);
+		must_be_true(obj->raw.type == type);
 
-		git_rawobj_close(&obj);
+		git_odb_object_close(obj);
 	}
 
     git_odb_close(db); 
 END_TEST
 
-BEGIN_TEST("readheader", readheader_loose_test)
+BEGIN_TEST(readheader1, "read only the header of several loose objects")
 	unsigned int i;
     git_odb *db;
 
@@ -199,54 +221,49 @@ BEGIN_TEST("readheader", readheader_loose_test)
 
 	for (i = 0; i < ARRAY_SIZE(loose_objects); ++i) {
 		git_oid id;
-		git_rawobj obj, header;
+		git_odb_object *obj;
+		size_t len;
+		git_otype type;
 
 		must_pass(git_oid_mkstr(&id, loose_objects[i]));
 
 		must_be_true(git_odb_exists(db, &id) == 1);
 
 		must_pass(git_odb_read(&obj, db, &id));
-		must_pass(git_odb_read_header(&header, db, &id));
+		must_pass(git_odb_read_header(&len, &type, db, &id));
 
-		must_be_true(obj.len == header.len);
-		must_be_true(obj.type == header.type);
+		must_be_true(obj->raw.len == len);
+		must_be_true(obj->raw.type == type);
 
-		git_rawobj_close(&obj);
+		git_odb_object_close(obj);
 	}
 
     git_odb_close(db);
 END_TEST
 
-git_testsuite *libgit2_suite_objread(void)
-{
-	git_testsuite *suite = git_testsuite_new("Object Read");
+BEGIN_SUITE(objread)
+	ADD_TEST(existsloose0);
 
-	ADD_TEST(suite, "existsloose", exists_loose_one);
+	ADD_TEST(readloose0);
+	ADD_TEST(readloose1);
+	ADD_TEST(readloose2);
+	ADD_TEST(readloose3);
+	ADD_TEST(readloose4);
+	ADD_TEST(readloose5);
+	ADD_TEST(readloose6);
 
-	ADD_TEST(suite, "readloose", read_loose_commit);
-	ADD_TEST(suite, "readloose", read_loose_tree);
-	ADD_TEST(suite, "readloose", read_loose_tag);
-	ADD_TEST(suite, "readloose", read_loose_zero);
-	ADD_TEST(suite, "readloose", read_loose_one);
-	ADD_TEST(suite, "readloose", read_loose_two);
-	ADD_TEST(suite, "readloose", read_loose_some);
-
-	/* TODO: import these (naming conflicts) */
 /*
-	ADD_TEST(suite, "readloose", read_loose_commit_enc);
-	ADD_TEST(suite, "readloose", read_loose_tree_enc);
-	ADD_TEST(suite, "readloose", read_loose_tag_enc);
-	ADD_TEST(suite, "readloose", read_loose_zero_enc);
-	ADD_TEST(suite, "readloose", read_loose_one_enc);
-	ADD_TEST(suite, "readloose", read_loose_two_enc);
-	ADD_TEST(suite, "readloose", read_loose_some_enc);
+	ADD_TEST(readloose_enc0);
+	ADD_TEST(readloose_enc1);
+	ADD_TEST(readloose_enc2);
+	ADD_TEST(readloose_enc3);
+	ADD_TEST(readloose_enc4);
+	ADD_TEST(readloose_enc5);
+	ADD_TEST(readloose_enc6);
 */
 
-	ADD_TEST(suite, "readpack", readpacked_test);
+	ADD_TEST(readpack0);
 
-	ADD_TEST(suite, "readheader", readheader_packed_test);
-	ADD_TEST(suite, "readheader", readheader_loose_test);
-
-
-	return suite;
-}
+	ADD_TEST(readheader0);
+	ADD_TEST(readheader1);
+END_SUITE
