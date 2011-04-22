@@ -161,6 +161,15 @@
 /** This feature has not been implemented yet */
 #define GIT_ENOTIMPLEMENTED (GIT_ERROR - 22)
 
+/** A reference with this name already exists */
+#define GIT_EEXISTS (GIT_ERROR - 23)
+
+/** The given integer literal is too large to be parsed */
+#define GIT_EOVERFLOW (GIT_ERROR - 24)
+
+/** The given literal is not a valid number */
+#define GIT_ENOTNUM (GIT_ERROR - 25)
+
 GIT_BEGIN_DECL
 
 typedef struct {

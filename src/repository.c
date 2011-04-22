@@ -346,7 +346,7 @@ static int repo_init_reinit(repo_init *results)
 {
 	/* TODO: reinit the repository */
 	results->has_been_reinit = 1;
-	return GIT_SUCCESS;
+	return GIT_ENOTIMPLEMENTED;
 }
 
 static int repo_init_createhead(git_repository *repo)
@@ -473,3 +473,29 @@ cleanup:
 	return error;
 }
 
+int git_repository_is_empty(git_repository *repo)
+{
+	git_reference *head, *branch;
+	int error;
+
+	error = git_reference_lookup(&head, repo, "HEAD");
+	if (error < GIT_SUCCESS)
+		return error;
+
+	if (git_reference_type(head) != GIT_REF_SYMBOLIC)
+		return GIT_EOBJCORRUPTED;
+
+	return git_reference_resolve(&branch, head) == GIT_SUCCESS ? 0 : 1;
+}
+
+const char *git_repository_path(git_repository *repo)
+{
+	assert(repo);
+	return repo->path_repository;
+}
+
+const char *git_repository_workdir(git_repository *repo)
+{
+	assert(repo);
+	return repo->path_workdir;
+}

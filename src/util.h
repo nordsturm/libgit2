@@ -14,12 +14,15 @@
  */
 #define git__malloc malloc
 #define git__calloc calloc
+#define git__realloc realloc
 #define git__strdup strdup
 
 extern int git__fmt(char *, size_t, const char *, ...)
 	GIT_FORMAT_PRINTF(3, 4);
 extern int git__prefixcmp(const char *str, const char *prefix);
 extern int git__suffixcmp(const char *str, const char *suffix);
+
+extern int git__strtol32(long *n, const char *buff, const char **end_buf, int base);
 
 /*
  * The dirname() function shall take a pointer to a character string
